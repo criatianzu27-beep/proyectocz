@@ -1,0 +1,52 @@
+
+#!/bin/bash
+# Clase 14 - Respaldo automatico de proyectocz
+
+set -euo pipefail
+
+export PATH="/usr/local/bin:/usr/bin:/bin"
+
+DIR_SCRIPT="$(cd "$(dirname "$0")" && pwd)"
+DIR_BASE="$(dirname "$DIR_SCRIPT")"
+DIR_RESPALDOS="$DIR_BASE/respaldos"
+
+CONTENEDOR="bbdd_mariadb"
+BASE_DATOS="proyectocz"
+FECHA=$(date +%Y%m%d_%H%M%S)
+
+. "$DIR_SCRIPT/respaldo.env"
+
+mkdir -p "$DIR_RESPALDOS"
+
+# 1. Respaldo completo de la base de datos
+ARCHIVO_BD="$DIR_RESPALDOS/${BASE_DATOS}_${FECHA}.sql.gz"
+
+docker exec -e MYSQL_PWD="$DB_PASS" "$CONTENEDOR" \
+  mariadb-dump -u root --single-transaction \
+  --routines --triggers --events \
+  --databases "$BASE_DATOS" | gzip > "$ARCHIVO_BD"
+
+# 2. Verificar que el archivo comprimido sea valido
+gunzip -t "$ARCHIVO_BD"
+
+if ! gunzip -c "$ARCHIVO_BD" | tail -n 1 | grep -q "Dump completed"; then
+    echo "ERROR: respaldo incompleto" >> "$DIR_RESPALDOS/respaldos.log"
+    exit 1
+fi
+
+# 3. Respaldo independiente de usuarios, roles y privilegios
+ARCHIVO_USUARIOS="$DIR_RESPALDOS/usuarios_${FECHA}.sql"
+
+docker exec -e MYSQL_PWD="$DB_PASS" "$CONTENEDOR" \
+  mariadb-dump -u root --system=users > "$ARCHIVO_USUARIOS"
+
+chmod 600 "$ARCHIVO_USUARIOS"
+
+# 4. Registrar resultado
+echo "$(date '+%F %T') OK: $ARCHIVO_BD" \
+  >> "$DIR_RESPALDOS/respaldos.log"
+
+echo "$(date '+%F %T') OK: $ARCHIVO_USUARIOS" \
+  >> "$DIR_RESPALDOS/respaldos.log"
+
+echo "Respaldo de proyectocz y usuarios completado."
